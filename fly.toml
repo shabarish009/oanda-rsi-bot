@@ -7,14 +7,29 @@ primary_region = "fra"
 [env]
   PORT = "8080"
 
-[processes]
-  app = "python oanda_rsi_bot.py"
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
 
 [mounts]
   source = "bot_data"
   destination = "/data"
 
+[processes]
+  app = "python oanda_rsi_bot.py"
+
 [experimental]
   auto_start = true
   auto_stop = false
   restart = "always"
+
+[checks]
+  dummy = { type = "tcp", interval = "30s", timeout = "5s" }
