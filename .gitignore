@@ -1,0 +1,28 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+venv/
+env/
+
+# Environment variables or secrets
+.env
+
+# macOS and Windows system files
+.DS_Store
+Thumbs.db
+
+# Logs and dumps
+*.log
+*.out
+
+# PyInstaller
+*.spec
+
+# VS Code settings
+.vscode/
+
+# Fly.io build/output artifacts
+fly.toml.lock
