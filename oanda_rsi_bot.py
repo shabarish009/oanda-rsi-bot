@@ -1,6 +1,6 @@
 import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logging.info("Bot starting...")
+logging.info("🔁 Bot starting...")
 
 import pandas as pd
 import numpy as np
@@ -29,7 +29,7 @@ RSI_OVERBOUGHT = 95
 RSI_OVERSOLD = 5
 TREND_SMA = 200
 ATR_PERIOD = 14
-RISK_PERCENT = 0.01  # 1% risk per trade
+RISK_PERCENT = 0.01
 ATR_MULTIPLIER_LOW = 2.0
 ATR_MULTIPLIER_HIGH = 3.5
 MAX_HOLD_DAYS = 5
@@ -52,9 +52,9 @@ def send_email(subject, body):
             server.starttls()
             server.login(EMAIL_USER, EMAIL_PASS)
             server.send_message(msg)
-        logging.info(f"Email sent: {subject}")
+        logging.info(f"📧 Email sent: {subject}")
     except Exception as e:
-        logging.error(f"Email error: {e}")
+        logging.error(f"❌ Email error: {e}")
 
 # === STRATEGY HELPERS ===
 def compute_rsi(series, period):
@@ -92,43 +92,58 @@ def is_bearish_engulfing(df):
            df['close'].iloc[-1] < df['open'].iloc[-2]
 
 def get_candles(instrument, count=400, granularity="H1"):
-    url = f"{OANDA_URL}/v3/instruments/{instrument}/candles"
-    params = {"count": count, "granularity": granularity, "price": "M"}
-    response = requests.get(url, headers=headers, params=params)
-    candles = response.json().get("candles", [])
-    if not candles:
+    try:
+        url = f"{OANDA_URL}/v3/instruments/{instrument}/candles"
+        params = {"count": count, "granularity": granularity, "price": "M"}
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        candles = response.json().get("candles", [])
+        if not candles:
+            return None
+        data = [{
+            "time": c["time"],
+            "open": float(c["mid"]["o"]),
+            "high": float(c["mid"]["h"]),
+            "low": float(c["mid"]["l"]),
+            "close": float(c["mid"]["c"]),
+        } for c in candles if c["complete"]]
+        df = pd.DataFrame(data)
+        df["time"] = pd.to_datetime(df["time"])
+        df.set_index("time", inplace=True)
+        return df
+    except Exception as e:
+        logging.warning(f"⚠️ Candle error for {instrument}: {e}")
         return None
-    data = [{
-        "time": c["time"],
-        "open": float(c["mid"]["o"]),
-        "high": float(c["mid"]["h"]),
-        "low": float(c["mid"]["l"]),
-        "close": float(c["mid"]["c"]),
-    } for c in candles if c["complete"]]
-    df = pd.DataFrame(data)
-    df["time"] = pd.to_datetime(df["time"])
-    df.set_index("time", inplace=True)
-    return df
 
 def get_tradeable_instruments():
-    url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/instruments"
-    response = requests.get(url, headers=headers)
-    instruments = response.json().get("instruments", [])
-    return [inst["name"] for inst in instruments if inst["type"] in ["CFD", "CURRENCY", "METAL", "BOND"]]
+    try:
+        url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/instruments"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        instruments = response.json().get("instruments", [])
+        return [inst["name"] for inst in instruments if inst["type"] in ["CFD", "CURRENCY", "METAL", "BOND"]]
+    except Exception as e:
+        logging.critical(f"Failed to fetch instruments: {e}")
+        return []
 
 def get_account_balance():
-    url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/summary"
-    response = requests.get(url, headers=headers)
-    return float(response.json()['account']['balance'])
+    try:
+        url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/summary"
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return float(response.json()['account']['balance'])
+    except Exception as e:
+        logging.critical(f"Failed to fetch account balance: {e}")
+        raise
 
 # === MARKET SCAN ===
 def scan_symbol(symbol, balance):
-    logging.info(f"Scanning symbol: {symbol}")
+    logging.info(f"🔍 Scanning: {symbol}")
     global open_trades, closed_trades
     try:
         df = get_candles(symbol)
         if df is None or len(df) < TREND_SMA:
-            logging.info(f"No or insufficient candles for {symbol}")
+            logging.info(f"⛔ No or insufficient candles for {symbol}")
             return
 
         df['SMA200'] = df['close'].rolling(TREND_SMA).mean()
@@ -176,17 +191,22 @@ def scan_symbol(symbol, balance):
                                 "stop": chandelier_stop, "target": price - 2 * risk,
                                 "entry_time": datetime.utcnow(), "units": units})
             send_email(f"SHORT Signal - {symbol}", f"SHORT {symbol} at {price:.2f} | Stop: {chandelier_stop:.2f} | Units: {units}")
-
     except Exception as e:
-        logging.error(f"Error with {symbol}: {e}")
+        logging.error(f"⚠️ Error with {symbol}: {e}")
 
 # === MAIN SCANNER ===
 def scan_market():
-    logging.info("Running market scan...")
-    balance = get_account_balance()
-    tradables = get_tradeable_instruments()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        executor.map(lambda s: scan_symbol(s, balance), tradables)
+    logging.info("🧠 Market scan started.")
+    try:
+        balance = get_account_balance()
+        tradables = get_tradeable_instruments()
+        if not tradables:
+            logging.warning("⚠️ No tradeable instruments found.")
+            return
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+            executor.map(lambda s: scan_symbol(s, balance), tradables)
+    except Exception as e:
+        logging.critical(f"🚨 Market scan failed: {e}")
 
 # === REPORT ===
 def end_of_day_report():
@@ -201,13 +221,25 @@ def end_of_day_report():
     send_email("Daily Trade Summary", summary)
     closed_trades.clear()
 
-# === SCHEDULER ===
-scan_market()
-logging.info("Initial scan complete. Entering scheduled mode...")
-schedule.every(SCAN_INTERVAL_MINUTES).minutes.do(scan_market)
-schedule.every().day.at("23:59").do(end_of_day_report)
+# === MAIN LOOP ===
+def main():
+    logging.info("🚀 Bot boot sequence initiated...")
+    try:
+        scan_market()
+        logging.info("✅ Initial market scan complete.")
+    except Exception as e:
+        logging.error(f"Initial scan_market() failed: {e}")
 
-logging.info("Optimized OANDA RSI(2) Bot is running...")
-while True:
-    schedule.run_pending()
-    time.sleep(1)
+    schedule.every(SCAN_INTERVAL_MINUTES).minutes.do(scan_market)
+    schedule.every().day.at("23:59").do(end_of_day_report)
+    logging.info("✅ Scheduler initialized. Bot is running...")
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        logging.critical(f"🔥 Fatal crash: {e}")
