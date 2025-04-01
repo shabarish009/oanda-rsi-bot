@@ -1,7 +1,4 @@
 import logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logging.info("🔁 Bot starting...")
-
 import pandas as pd
 import numpy as np
 import requests
@@ -12,6 +9,10 @@ import concurrent.futures
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# ==== LOGGING ====
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.info("Bot starting...")
 
 # ==== CONFIGURATION ====
 OANDA_API_KEY = "93b6806b94a587128ad4e7be3542d775-bee30c02602ff4fe553d252b079c3562"
@@ -52,9 +53,9 @@ def send_email(subject, body):
             server.starttls()
             server.login(EMAIL_USER, EMAIL_PASS)
             server.send_message(msg)
-        logging.info(f"📧 Email sent: {subject}")
+        logging.info(f"Email sent: {subject}")
     except Exception as e:
-        logging.error(f"❌ Email error: {e}")
+        logging.error(f"Email error: {e}")
 
 # === STRATEGY HELPERS ===
 def compute_rsi(series, period):
@@ -91,12 +92,12 @@ def is_bearish_engulfing(df):
            df['open'].iloc[-2] < df['close'].iloc[-2] and \
            df['close'].iloc[-1] < df['open'].iloc[-2]
 
+# === OANDA HELPERS ===
 def get_candles(instrument, count=400, granularity="H1"):
+    url = f"{OANDA_URL}/v3/instruments/{instrument}/candles"
+    params = {"count": count, "granularity": granularity, "price": "M"}
     try:
-        url = f"{OANDA_URL}/v3/instruments/{instrument}/candles"
-        params = {"count": count, "granularity": granularity, "price": "M"}
         response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
         candles = response.json().get("candles", [])
         if not candles:
             return None
@@ -112,38 +113,28 @@ def get_candles(instrument, count=400, granularity="H1"):
         df.set_index("time", inplace=True)
         return df
     except Exception as e:
-        logging.warning(f"⚠️ Candle error for {instrument}: {e}")
+        logging.error(f"Failed to fetch candles for {instrument}: {e}")
         return None
 
 def get_tradeable_instruments():
-    try:
-        url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/instruments"
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        instruments = response.json().get("instruments", [])
-        return [inst["name"] for inst in instruments if inst["type"] in ["CFD", "CURRENCY", "METAL", "BOND"]]
-    except Exception as e:
-        logging.critical(f"Failed to fetch instruments: {e}")
-        return []
+    url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/instruments"
+    response = requests.get(url, headers=headers)
+    instruments = response.json().get("instruments", [])
+    return [inst["name"] for inst in instruments if inst["type"] in ["CFD", "CURRENCY", "METAL", "BOND"]]
 
 def get_account_balance():
-    try:
-        url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/summary"
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        return float(response.json()['account']['balance'])
-    except Exception as e:
-        logging.critical(f"Failed to fetch account balance: {e}")
-        raise
+    url = f"{OANDA_URL}/v3/accounts/{OANDA_ACCOUNT_ID}/summary"
+    response = requests.get(url, headers=headers)
+    return float(response.json()['account']['balance'])
 
 # === MARKET SCAN ===
 def scan_symbol(symbol, balance):
-    logging.info(f"🔍 Scanning: {symbol}")
+    logging.info(f"Scanning symbol: {symbol}")
     global open_trades, closed_trades
     try:
         df = get_candles(symbol)
         if df is None or len(df) < TREND_SMA:
-            logging.info(f"⛔ No or insufficient candles for {symbol}")
+            logging.warning(f"Insufficient candles for {symbol}")
             return
 
         df['SMA200'] = df['close'].rolling(TREND_SMA).mean()
@@ -158,13 +149,16 @@ def scan_symbol(symbol, balance):
         active = next((t for t in open_trades if t['symbol'] == symbol), None)
 
         if active:
-            pnl = ((price - active['entry'])/active['entry']*100) if active['type']=="long" else ((active['entry'] - price)/active['entry']*100)
+            pnl = ((price - active['entry']) / active['entry']) * 100 if active['type'] == "long" else \
+                  ((active['entry'] - price) / active['entry']) * 100
             if datetime.utcnow() - active['entry_time'] > timedelta(days=MAX_HOLD_DAYS) or \
-               (active['type']=="long" and price <= active['stop']) or \
-               (active['type']=="short" and price >= active['stop']):
-                closed_trades.append({"symbol": symbol, "type": active['type'], "entry": active['entry'],
-                                      "exit": price, "pnl": round(pnl, 2), "result": "exit",
-                                      "entry_time": active['entry_time'].isoformat(), "exit_time": datetime.utcnow().isoformat()})
+               (active['type'] == "long" and price <= active['stop']) or \
+               (active['type'] == "short" and price >= active['stop']):
+                closed_trades.append({
+                    "symbol": symbol, "type": active['type'], "entry": active['entry'], "exit": price,
+                    "pnl": round(pnl, 2), "result": "exit",
+                    "entry_time": active['entry_time'].isoformat(), "exit_time": datetime.utcnow().isoformat()
+                })
                 open_trades.remove(active)
                 send_email(f"{symbol} EXIT", f"{active['type'].upper()} {symbol} at {price:.2f} | PnL: {pnl:.2f}%")
             return
@@ -181,6 +175,7 @@ def scan_symbol(symbol, balance):
                                 "stop": chandelier_stop, "target": price + 2 * risk,
                                 "entry_time": datetime.utcnow(), "units": units})
             send_email(f"LONG Signal - {symbol}", f"LONG {symbol} at {price:.2f} | Stop: {chandelier_stop:.2f} | Units: {units}")
+
         elif trend == "down" and rsi2 > RSI_OVERBOUGHT and is_bearish_engulfing(df):
             chandelier_stop = df['high'].rolling(window=22).max().iloc[-1] + atr_multiplier * df['ATR'].iloc[-1]
             risk = abs(price - chandelier_stop)
@@ -191,24 +186,19 @@ def scan_symbol(symbol, balance):
                                 "stop": chandelier_stop, "target": price - 2 * risk,
                                 "entry_time": datetime.utcnow(), "units": units})
             send_email(f"SHORT Signal - {symbol}", f"SHORT {symbol} at {price:.2f} | Stop: {chandelier_stop:.2f} | Units: {units}")
-    except Exception as e:
-        logging.error(f"⚠️ Error with {symbol}: {e}")
 
-# === MAIN SCANNER ===
+    except Exception as e:
+        logging.error(f"Error with {symbol}: {e}")
+
+# === SCANNER ===
 def scan_market():
-    logging.info("🧠 Market scan started.")
-    try:
-        balance = get_account_balance()
-        tradables = get_tradeable_instruments()
-        if not tradables:
-            logging.warning("⚠️ No tradeable instruments found.")
-            return
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-            executor.map(lambda s: scan_symbol(s, balance), tradables)
-    except Exception as e:
-        logging.critical(f"🚨 Market scan failed: {e}")
+    logging.info("Running market scan...")
+    balance = get_account_balance()
+    symbols = get_tradeable_instruments()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        executor.map(lambda sym: scan_symbol(sym, balance), symbols)
 
-# === REPORT ===
+# === END OF DAY ===
 def end_of_day_report():
     if not closed_trades:
         return
@@ -221,25 +211,20 @@ def end_of_day_report():
     send_email("Daily Trade Summary", summary)
     closed_trades.clear()
 
+# === SCHEDULER SETUP ===
+scan_market()
+logging.info("Initial scan complete. Entering scheduled mode...")
+
+schedule.every(SCAN_INTERVAL_MINUTES).minutes.do(scan_market)
+schedule.every().day.at("23:59").do(end_of_day_report)
+
 # === MAIN LOOP ===
-def main():
-    logging.info("🚀 Bot boot sequence initiated...")
-    try:
-        scan_market()
-        logging.info("✅ Initial market scan complete.")
-    except Exception as e:
-        logging.error(f"Initial scan_market() failed: {e}")
-
-    schedule.every(SCAN_INTERVAL_MINUTES).minutes.do(scan_market)
-    schedule.every().day.at("23:59").do(end_of_day_report)
-    logging.info("✅ Scheduler initialized. Bot is running...")
-
+try:
+    logging.info("Optimized OANDA RSI(2) Bot is running...")
     while True:
         schedule.run_pending()
         time.sleep(1)
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logging.critical(f"🔥 Fatal crash: {e}")
+except KeyboardInterrupt:
+    logging.warning("SIGINT caught. Keeping process alive to avoid shutdown.")
+    while True:
+        time.sleep(3600)
