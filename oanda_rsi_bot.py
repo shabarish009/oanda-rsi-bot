@@ -10,6 +10,10 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+# === LOGGER INIT ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.info("Bot successfully launched and waiting for next scan...")
+
 # ==== CONFIGURATION ====
 OANDA_API_KEY = "93b6806b94a587128ad4e7be3542d775-bee30c02602ff4fe553d252b079c3562"
 OANDA_ACCOUNT_ID = "101-004-27216569-001"
@@ -26,16 +30,15 @@ RSI_OVERBOUGHT = 95
 RSI_OVERSOLD = 5
 TREND_SMA = 200
 ATR_PERIOD = 14
-RISK_PERCENT = 0.01  # 1% risk per trade
+RISK_PERCENT = 0.01
 ATR_MULTIPLIER_LOW = 2.0
 ATR_MULTIPLIER_HIGH = 3.5
 MAX_HOLD_DAYS = 5
-SCAN_INTERVAL_MINUTES = 2  # More frequent scanning
-MAX_THREADS = 10  # Cap to fit within Fly.io free tier budget
+SCAN_INTERVAL_MINUTES = 2
+MAX_THREADS = 10
 
 open_trades = []
 closed_trades = []
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 headers = {"Authorization": f"Bearer {OANDA_API_KEY}"}
 
 # === EMAIL ===
@@ -65,13 +68,10 @@ def compute_rsi(series, period):
     return 100 - (100 / (1 + rs))
 
 def compute_atr(df, period):
-    high = df['high']
-    low = df['low']
-    close = df['close']
     tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low - close.shift()).abs()
+        df['high'] - df['low'],
+        (df['high'] - df['close'].shift()).abs(),
+        (df['low'] - df['close'].shift()).abs()
     ], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
 
@@ -121,10 +121,12 @@ def get_account_balance():
 
 # === MARKET SCAN ===
 def scan_symbol(symbol, balance):
+    logging.info(f"Scanning symbol: {symbol}")
     global open_trades, closed_trades
     try:
         df = get_candles(symbol)
         if df is None or len(df) < TREND_SMA:
+            logging.info(f"No or insufficient candles for {symbol}")
             return
 
         df['SMA200'] = df['close'].rolling(TREND_SMA).mean()
@@ -133,6 +135,7 @@ def scan_symbol(symbol, balance):
         latest = df.iloc[-1]
         price, sma, rsi2, atr = latest['close'], latest['SMA200'], latest['RSI2'], latest['ATR']
         if pd.isna(sma) or pd.isna(atr):
+            logging.info(f"Skipping {symbol} due to NaN in SMA/ATR")
             return
 
         trend = "up" if price > sma else "down"
@@ -144,6 +147,7 @@ def scan_symbol(symbol, balance):
             if datetime.utcnow() - active['entry_time'] > timedelta(days=MAX_HOLD_DAYS) or \
                (active['type']=="long" and price <= active['stop']) or \
                (active['type']=="short" and price >= active['stop']):
+                logging.info(f"EXIT signal: {symbol} | Type: {active['type']} | PnL: {pnl:.2f}%")
                 closed_trades.append({"symbol": symbol, "type": active['type'], "entry": active['entry'],
                                       "exit": price, "pnl": round(pnl, 2), "result": "exit",
                                       "entry_time": active['entry_time'].isoformat(), "exit_time": datetime.utcnow().isoformat()})
@@ -160,16 +164,19 @@ def scan_symbol(symbol, balance):
         units = int((balance * RISK_PERCENT) / risk)
 
         if trend == "up" and rsi2 < RSI_OVERSOLD and is_bullish_engulfing(df):
+            logging.info(f"ENTRY signal: {symbol} | LONG | Price: {price:.2f} | RSI2: {rsi2:.2f}")
             open_trades.append({"symbol": symbol, "type": "long", "entry": price,
                                 "stop": chandelier_stop, "target": price + 2 * risk,
                                 "entry_time": datetime.utcnow(), "units": units})
             send_email(f"LONG Signal - {symbol}", f"LONG {symbol} at {price:.2f} | Stop: {chandelier_stop:.2f} | Units: {units}")
+
         elif trend == "down" and rsi2 > RSI_OVERBOUGHT and is_bearish_engulfing(df):
             chandelier_stop = df['high'].rolling(window=22).max().iloc[-1] + atr_multiplier * df['ATR'].iloc[-1]
             risk = abs(price - chandelier_stop)
             if risk <= 0:
                 return
             units = int((balance * RISK_PERCENT) / risk)
+            logging.info(f"ENTRY signal: {symbol} | SHORT | Price: {price:.2f} | RSI2: {rsi2:.2f}")
             open_trades.append({"symbol": symbol, "type": "short", "entry": price,
                                 "stop": chandelier_stop, "target": price - 2 * risk,
                                 "entry_time": datetime.utcnow(), "units": units})
@@ -180,6 +187,7 @@ def scan_symbol(symbol, balance):
 
 # === MAIN SCANNER ===
 def scan_market():
+    logging.info("Running market scan...")
     balance = get_account_balance()
     tradables = get_tradeable_instruments()
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
@@ -202,7 +210,7 @@ def end_of_day_report():
 schedule.every(SCAN_INTERVAL_MINUTES).minutes.do(scan_market)
 schedule.every().day.at("23:59").do(end_of_day_report)
 
-logging.info("Optimized OANDA RSI(2) Bot with Parallel Execution and Momentum Confirmation started...")
+logging.info("Optimized OANDA RSI(2) Bot with Full Logging, Parallel Execution, and Momentum Confirmation started...")
 while True:
     schedule.run_pending()
     time.sleep(1)
