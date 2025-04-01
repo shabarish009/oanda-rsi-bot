@@ -1,14 +1,36 @@
 app = "oanda-rsi-bot"
-
 primary_region = "fra"
 
 [build]
   image = "python:3.10"
 
+[env]
+  PORT = "8080"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
 [processes]
   app = "python oanda_rsi_bot.py"
+
+[mounts]
+  source = "bot_data"
+  destination = "/data"
 
 [experimental]
   auto_start = true
   auto_stop = false
   restart = "always"
+
+# Optional: Disable Fly.io health check if you're not serving HTTP
+[checks]
+  dummy = { type = "tcp", interval = "30s", timeout = "5s" }
