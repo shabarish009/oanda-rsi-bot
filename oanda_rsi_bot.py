@@ -9,21 +9,9 @@ import time
 import schedule
 import smtplib
 import concurrent.futures
-import threading
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from flask import Flask
-
-# === FLASK SERVER FOR FLY.IO HEALTHCHECK ===
-app = Flask(__name__)
-
-@app.route("/")
-def healthcheck():
-    return "Bot is running", 200
-
-def start_http_server():
-    app.run(host="0.0.0.0", port=8080)
 
 # ==== CONFIGURATION ====
 OANDA_API_KEY = "93b6806b94a587128ad4e7be3542d775-bee30c02602ff4fe553d252b079c3562"
@@ -46,7 +34,7 @@ ATR_MULTIPLIER_LOW = 2.0
 ATR_MULTIPLIER_HIGH = 3.5
 MAX_HOLD_DAYS = 5
 SCAN_INTERVAL_MINUTES = 2
-MAX_THREADS = 10
+MAX_THREADS = 20
 
 open_trades = []
 closed_trades = []
@@ -203,13 +191,12 @@ def scan_symbol(symbol, balance):
                                 "stop": chandelier_stop, "target": price - 2 * risk,
                                 "entry_time": datetime.utcnow(), "units": units})
             send_email(f"SHORT Signal - {symbol}", f"SHORT {symbol} at {price:.2f} | Stop: {chandelier_stop:.2f} | Units: {units}")
-
     except Exception as e:
         logging.error(f"⚠️ Error with {symbol}: {e}")
 
 # === MAIN SCANNER ===
 def scan_market():
-    logging.info("🧠 Market scan started.")
+    logging.info("🧐 Market scan started.")
     try:
         balance = get_account_balance()
         tradables = get_tradeable_instruments()
@@ -236,8 +223,6 @@ def end_of_day_report():
 
 # === MAIN LOOP ===
 def main():
-    threading.Thread(target=start_http_server, daemon=True).start()
-    logging.info("🌐 HTTP healthcheck server started.")
     logging.info("🚀 Bot boot sequence initiated...")
     try:
         scan_market()
@@ -248,15 +233,9 @@ def main():
     schedule.every(SCAN_INTERVAL_MINUTES).minutes.do(scan_market)
     schedule.every().day.at("23:59").do(end_of_day_report)
     logging.info("✅ Scheduler initialized. Bot is running...")
-
-    try:
-        while True:
-            schedule.run_pending()
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logging.warning("🛑 SIGINT received — keeping app alive to prevent Fly autostop.")
-        while True:
-            time.sleep(3600)
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
 
 if __name__ == "__main__":
     try:
