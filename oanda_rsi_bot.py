@@ -13,7 +13,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # ==== CONFIGURATION ====
-OANDA_API_KEY = "93b6806b94a587128ad4e7be3542d775-bee30c02602ff4fe553d252b079c3562"
+OANDA_API_KEY = "576a19c8c4e7708aba8d466a61797a1e-019579e805446c206e710dc67bba70df"
 OANDA_ACCOUNT_ID = "101-004-27216569-001"
 OANDA_URL = "https://api-fxpractice.oanda.com"
 EMAIL_USER = "shammy09102000@gmail.com"
