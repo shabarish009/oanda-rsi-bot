@@ -33,7 +33,7 @@ RISK_PERCENT = 0.01
 ATR_MULTIPLIER_LOW = 2.0
 ATR_MULTIPLIER_HIGH = 3.5
 MAX_HOLD_DAYS = 5
-SCAN_INTERVAL_MINUTES = 2
+SCAN_INTERVAL_MINUTES = 5
 MAX_THREADS = 20
 
 open_trades = []
@@ -91,10 +91,18 @@ def is_bearish_engulfing(df):
            df['open'].iloc[-2] < df['close'].iloc[-2] and \
            df['close'].iloc[-1] < df['open'].iloc[-2]
 
+def passes_volume_filter(df):
+    if 'volume' not in df.columns:
+        return True
+    df['rolling_volume_median'] = df['volume'].rolling(window=20).median()
+    if df['rolling_volume_median'].iloc[-1] < 5:
+        return True
+    return df['volume'].iloc[-1] >= 0.5 * df['rolling_volume_median'].iloc[-1]
+
 def get_candles(instrument, count=400, granularity="H1"):
     try:
         url = f"{OANDA_URL}/v3/instruments/{instrument}/candles"
-        params = {"count": count, "granularity": granularity, "price": "M"}
+        params = {"count": count, "granularity": granularity, "price": "M", "includeFirst": False}
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
         candles = response.json().get("candles", [])
@@ -106,6 +114,7 @@ def get_candles(instrument, count=400, granularity="H1"):
             "high": float(c["mid"]["h"]),
             "low": float(c["mid"]["l"]),
             "close": float(c["mid"]["c"]),
+            "volume": c.get("volume", 0)
         } for c in candles if c["complete"]]
         df = pd.DataFrame(data)
         df["time"] = pd.to_datetime(df["time"])
@@ -176,12 +185,12 @@ def scan_symbol(symbol, balance):
             return
         units = int((balance * RISK_PERCENT) / risk)
 
-        if trend == "up" and rsi2 < RSI_OVERSOLD and is_bullish_engulfing(df):
+        if trend == "up" and rsi2 < RSI_OVERSOLD and is_bullish_engulfing(df) and passes_volume_filter(df):
             open_trades.append({"symbol": symbol, "type": "long", "entry": price,
                                 "stop": chandelier_stop, "target": price + 2 * risk,
                                 "entry_time": datetime.utcnow(), "units": units})
             send_email(f"LONG Signal - {symbol}", f"LONG {symbol} at {price:.2f} | Stop: {chandelier_stop:.2f} | Units: {units}")
-        elif trend == "down" and rsi2 > RSI_OVERBOUGHT and is_bearish_engulfing(df):
+        elif trend == "down" and rsi2 > RSI_OVERBOUGHT and is_bearish_engulfing(df) and passes_volume_filter(df):
             chandelier_stop = df['high'].rolling(window=22).max().iloc[-1] + atr_multiplier * df['ATR'].iloc[-1]
             risk = abs(price - chandelier_stop)
             if risk <= 0:
