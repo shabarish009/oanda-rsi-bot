@@ -1,4 +1,4 @@
-# oanda_live_trader.py - Final Version with Trade Execution, Volume Filter, Dynamic Trailing Stops, and Open Trade Tracking
+# oanda_live_trader.py - Final Version with Important Logging
 
 import logging
 import pandas as pd
@@ -36,6 +36,8 @@ MAX_THREADS = 20
 
 headers = {"Authorization": f"Bearer {OANDA_API_KEY}"}
 open_trades = []
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # === EMAIL ===
 def send_email(subject, body):
@@ -122,7 +124,9 @@ def get_tradeable_instruments():
     try:
         r = requests.get(url, headers=headers)
         r.raise_for_status()
-        return [i["name"] for i in r.json()["instruments"] if i["type"] in ["CFD", "CURRENCY", "METAL", "BOND"]]
+        instruments = [i["name"] for i in r.json()["instruments"] if i["type"] in ["CFD", "CURRENCY", "METAL", "BOND"]]
+        logging.info(f"✅ Total instruments scanned: {len(instruments)}")
+        return instruments
     except Exception as e:
         logging.critical(f"Instrument fetch failed: {e}")
         return []
@@ -195,7 +199,7 @@ def scan_symbol(symbol, balance):
 
 # === MAIN ===
 def scan_market():
-    logging.info("🔁 Market scan started")
+    logging.info("\U0001f9d0 Market scan started")
     balance = get_account_balance()
     tradables = get_tradeable_instruments()
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
@@ -205,7 +209,7 @@ def end_of_day_report():
     send_email("Daily Bot Status", f"End of day check completed. Open trades: {len(open_trades)}")
 
 def main():
-    logging.info("🚀 Bot starting")
+    logging.info("\U0001f680 Bot booted successfully. Running scans...")
     scan_market()
     schedule.every(SCAN_INTERVAL_MINUTES).minutes.do(scan_market)
     schedule.every().day.at("23:59").do(end_of_day_report)
