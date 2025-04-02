@@ -1,4 +1,4 @@
-# oanda_live_trader.py - Updated with full live trade execution support
+# oanda_live_trader.py - Final Version with Trade Execution, Volume Filter, Dynamic Trailing Stops, and Open Trade Tracking
 
 import logging
 import pandas as pd
@@ -36,7 +36,6 @@ MAX_THREADS = 20
 
 headers = {"Authorization": f"Bearer {OANDA_API_KEY}"}
 open_trades = []
-closed_trades = []
 
 # === EMAIL ===
 def send_email(subject, body):
@@ -170,7 +169,6 @@ def scan_symbol(symbol, balance):
 
     atr_median = df['ATR'].median()
     atr_multiplier = ATR_MULTIPLIER_HIGH if atr >= atr_median else ATR_MULTIPLIER_LOW
-
     chandelier_stop = calculate_chandelier_exit(df, atr_multiplier).iloc[-1]
     risk = abs(price - chandelier_stop)
     if risk <= 0:
@@ -182,6 +180,7 @@ def scan_symbol(symbol, balance):
 
     if price > sma and rsi < RSI_OVERSOLD and is_bullish_engulfing(df) and passes_volume_filter(df):
         place_oanda_trade(symbol, units, chandelier_stop, price + 2*risk)
+        open_trades.append({"symbol": symbol, "type": "long", "entry": price, "stop": chandelier_stop, "entry_time": datetime.utcnow(), "highest_close": price})
         send_email(f"LONG - {symbol}", f"Entry: {price:.2f} | SL: {chandelier_stop:.2f} | TP: {price + 2*risk:.2f} | Units: {units}")
 
     elif price < sma and rsi > RSI_OVERBOUGHT and is_bearish_engulfing(df) and passes_volume_filter(df):
@@ -191,6 +190,7 @@ def scan_symbol(symbol, balance):
             return
         units = -int((balance * RISK_PERCENT) / risk)
         place_oanda_trade(symbol, units, stop, price - 2*risk)
+        open_trades.append({"symbol": symbol, "type": "short", "entry": price, "stop": stop, "entry_time": datetime.utcnow()})
         send_email(f"SHORT - {symbol}", f"Entry: {price:.2f} | SL: {stop:.2f} | TP: {price - 2*risk:.2f} | Units: {units}")
 
 # === MAIN ===
@@ -202,7 +202,7 @@ def scan_market():
         executor.map(lambda sym: scan_symbol(sym, balance), tradables)
 
 def end_of_day_report():
-    send_email("Daily Bot Status", "End of day check completed.")
+    send_email("Daily Bot Status", f"End of day check completed. Open trades: {len(open_trades)}")
 
 def main():
     logging.info("🚀 Bot starting")
